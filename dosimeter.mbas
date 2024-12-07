@@ -1,0 +1,407 @@
+program dosimeter
+
+' Declarations section 
+' Lcd module connections
+dim LCD_RS as sbit at RB7_bit
+    LCD_EN as sbit at RB6_bit
+    LCD_D4 as sbit at RB5_bit
+    LCD_D5 as sbit at RB4_bit
+    LCD_D6 as sbit at RB3_bit
+    LCD_D7 as sbit at RB2_bit
+
+dim LCD_RS_Direction as sbit at TRISB7_bit
+    LCD_EN_Direction as sbit at TRISB6_bit
+    LCD_D4_Direction as sbit at TRISB5_bit
+    LCD_D5_Direction as sbit at TRISB4_bit
+    LCD_D6_Direction as sbit at TRISB3_bit
+    LCD_D7_Direction as sbit at TRISB2_bit
+' End Lcd module connections
+' Define Variables
+
+dim txt as char[10]
+    txt1 as char[5]
+    txt2 as char[3]
+    DispVoltage as char[11]
+    CF_c as char[5]
+    CPM_Display as string[11]
+
+dim cnt as longint
+    timer_cnt as integer
+    cpm as longint
+    counts as longint
+    cpm_read_done as integer
+    dose as longint
+    ch as word
+    cc as byte
+    CF as byte
+    CF_eeprom as byte
+    CF_d as byte
+    CF_calc as word
+    ALARM as word
+    n as byte
+    n2 as bit
+    dd as byte
+    event as bit
+
+    light as sbit at RB1_bit
+    alert as sbit at RC5_bit
+    
+    dim hh as  byte
+    adc_rd  as  integer
+    DispV  as  string[11]
+    tlong as  longint
+    
+    
+    
+ sub procedure interrupt()             ' Interrupt Settings
+  if (TMR1IF_bit = 1) then             ' Test Timer1 interrupt flag
+
+    if(timer_cnt = 99) then            ' When 10 second time elapsed
+      counts = cnt                     ' Store result in freq
+      cnt = 0                          ' Reset counter
+      timer_cnt = 0                    ' Reset timer_cnt
+      cpm_read_done = 1                ' Set flag = 1
+     else
+      inc(timer_cnt)                   ' Increment timer_cnt if not elapsed 10 second
+    end if
+
+    TMR1H = 0x3C                       ' First write higher byte to TMR1 0x3CB0
+    TMR1L = 0xB0                       ' Write lower byte to TMR1
+    TMR1IF_bit = 0                     ' Clear Timer1 interrupt flag
+  end if
+
+
+  if(INTF_bit) then                    ' Test RB0/INT interrupt flag
+    cnt = cnt + 1                      ' Count interrupts on RB0/INT pin
+    PORTC.4 = 1                        ' Generate Interrupt for Arduino
+    nop
+    PORTC.4 = 0
+    event  = 1
+    INTF_bit = 0                       ' Clear RB0/INT interrupt flag
+
+  end if
+  
+
+end sub
+ 
+ sub procedure calibration()
+    GIE_bit = 0
+    CF = 0x39
+    alert = 0
+    light = 1
+    
+    Lcd_Cmd(_LCD_CLEAR)            ' Clear display
+
+
+    while (PORTC.2 = 0)
+       adc_rd = ADC_Read(0)
+        tlong = adc_rd * 4.88
+
+       if tlong > 200 then                     '
+         LongIntToStr (tlong, DispV)
+         LCD_Out (1, 5, DispV)
+         LCD_Out (1, 1, "H.Voltage:")
+         LCD_Out (1, 16, "V")
+         LCD_Out (2, 1, "                ")
+         delay_ms (250)
+       
+          else
+          LCD_Out (1, 1, "H.Voltage:      ")
+          LCD_out (2, 1, "No Probe Found! ")
+        end if
+        
+    wend
+
+    Lcd_Cmd(_LCD_CLEAR)
+    LCD_Out(1, 1, "  Set C.Factor  ")
+    LCD_Out(2, 6, "0.0057")
+    while (1)
+     if Button (PORTC, 2, 100, 1) then
+       inc (CF)
+         if CF> 0xFA then
+          dec (CF)
+         end if
+     ch = (CF div 100) mod 10
+     Lcd_Chr (2, 9, 48+ch)
+     ch = (CF div 10) mod 10
+     Lcd_Chr_CP (48+ch)
+     ch = CF mod 10
+     Lcd_Chr_CP (48+ch)
+
+     end if
+
+     if Button (PORTC, 1, 100, 1) then
+       dec (CF)
+         if CF<0x0A then
+           inc (CF)
+         end if
+     ch = (CF div 100) mod 10
+     Lcd_Chr (2, 9, 48+ch)
+     ch = (CF div 10) mod 10
+     Lcd_Chr_CP (48+ch)
+     ch = CF mod 10
+     Lcd_Chr_CP (48+ch)
+
+     end if
+
+     if Button (PORTC, 0, 100, 1) then
+       goto Safe_EEPROM
+     end if
+    wend
+    
+    Safe_EEPROM:
+
+
+           Lcd_Cmd(_LCD_CLEAR)
+           LCD_Out(1, 1, " SAVE TO MEMORY ")
+           LCD_Out(2, 1, "   +YES -NO     ")
+     while(1)
+           if Button (PORTC, 2, 100, 1) then
+                 EEPROM_Write (0x01, CF)
+                 LCD_Out(1, 1, "    SAVED TO    ")
+                 LCD_Out(2, 1, "     MEMORY!    ")
+                 delay_ms(500)
+                 goto Set_Alert
+
+           end if
+
+           if Button (PORTC, 1, 100, 1) then
+                  LCD_Out(1, 1, " SAVED ONLY FOR ")
+                  LCD_Out(2, 1, "    SESSION!    ")
+                  delay_ms(500)
+                  goto Set_Alert
+
+           end if
+
+     wend
+    Set_Alert:
+    ALARM = 1000
+    Lcd_Cmd(_LCD_CLEAR)
+    LCD_Out(1, 1, " Set ALERT CPM: ")
+    LCD_Out(2, 6, "1000")
+    while (1)
+     if Button (PORTC, 2, 100, 1) then
+       ALARM = ALARM + 10
+         if ALARM>5000 then
+          ALARM = ALARM - 10
+         end if
+      WordToStr (ALARM, txt1)
+      LCD_Out (2, 6, txt1)
+     end if
+
+     if Button (PORTC, 1, 100, 1) then
+       ALARM = ALARM - 10
+         if ALARM<100 then
+           ALARM = ALARM + 10
+         end if
+      WordToStr (ALARM, txt1)
+      LCD_Out (2, 6, txt1)
+
+     end if
+
+     if Button (PORTC, 0, 100, 1) then
+      goto sof_calibration
+     end if
+    wend
+    
+
+    sof_calibration:
+     Lcd_Cmd(_LCD_CLEAR)
+       counts = 0
+       cpm = 0
+       dose = 0
+       timer_cnt = 0
+       cpm_read_done = 0
+       TMR1IF_bit = 0
+ end sub
+
+const character as byte[8] = (17,17,17,17,25,22,16,16)               'Custom charachter
+
+sub procedure CustomChar(dim pos_row as byte, dim pos_char as byte)
+  dim i as byte
+    Lcd_Cmd(64)
+    for i = 0 to 7
+      Lcd_Chr_CP(character[i])
+    next i
+    Lcd_Cmd(_LCD_RETURN_HOME)
+    Lcd_Chr(pos_row, pos_char, 0)
+end sub
+
+main:
+'   Main program
+CF = 0x39
+alert = 0
+light = 1
+counts = 0
+cpm = 0
+timer_cnt = 0
+cpm_read_done = 0
+ALARM = 1000
+n = 0
+
+CMCON = 0x07
+TRISB = %00000001
+TRISC = %00001111
+OPTION_REG = %10000000
+INTCON = %00000000
+PIE1 = %00000000
+PIE2 = %00000000
+PIR1 = %00000000
+PIR2 = %00000000
+ADCON1 = %10000000
+TRISA.0 = 1
+
+PORTC.4 = 0
+ADC_Init()
+delay_ms(20)
+UART1_Init(9600)
+delay_ms(150)
+
+  Lcd_Init()                     ' Initialize Lcd
+  Delay_ms (20)                  ' Wait 20ms
+  Lcd_Cmd(_LCD_CLEAR)            ' Clear display
+  Lcd_Cmd(_LCD_CURSOR_OFF)       ' Cursor off
+  Lcd_Out(1, 1, "RadioHobbyStore ")
+  Lcd_Out(2, 1, "  Electronics   ")
+  delay_ms(1000)
+  Lcd_Out(1, 1, "  mygeiger.org  ")
+  Lcd_Out(2, 1, " Geiger Counter ")
+  delay_ms(1000)
+  Lcd_Cmd(_LCD_CLEAR)
+
+  CF_eeprom = EEPROM_Read (0x01)
+  CF_d = CF_eeprom
+  CF = CF_eeprom
+  if CF_d < 0x64 then
+    ByteToStr(CF_d, txt2)
+    LCD_Out(1, 1, "ConversionFactor")
+    LCD_Out(2, 8, txt2)
+    LCD_Out(2, 5, "0.00")
+   else
+    ByteToStr(CF_d, txt2)
+    LCD_Out(1, 1, "ConversionFactor")
+    LCD_Out(2, 8, txt2)
+    LCD_Out(2, 5, "0.0")
+  
+  end if
+  delay_ms(500)
+  Lcd_Cmd(_LCD_CLEAR)
+
+            LCD_Out (1, 1, "please wait...  ")
+            
+MEASURE:
+  counts = 0
+  cpm = 0
+  timer_cnt = 0
+  cpm_read_done = 0
+  dd = 1
+
+  TMR1H = 0x3C                         ' First write higher byte to TMR1
+  TMR1L = 0xB0                         ' Write lower byte to TMR1
+  T1CON = 0x35                         ' Timer1 prescaler settings
+  PIE1 = %00000001
+  TMR1IE_bit = 1                       ' Enable Timer1 overflow interrupt
+  TMR1IF_bit = 0
+  INTEDG_bit = 0                       ' Interrupt on RB0/INT pin is edge triggered, setting it on low edge
+  TMR0IF_bit = 0
+
+  INTCON = %11010000                        ' Set GIE, PIE, INTE (0xD0)
+
+  CF_calc = $0000
+  while(1)                             ' Endless loop start
+    if n = 0 then
+     if event = 1 then
+    
+       LCD_Chr (2, dd, ">")
+       inc (dd)
+        if dd>16 then
+          LCD_out (2, 1, "                ")
+         dd = 1
+        end if
+        
+        event = 0
+      end if
+    end if
+
+    if n2 = 1 then
+                 if event = 1 then
+
+                 LCD_Chr (2, dd, ">")
+                 inc (dd)
+                  if dd>16 then
+                   LCD_out (2, 1, "                ")
+                   dd = 1
+                  end if
+
+                  event = 0
+                end if
+     end if
+
+    if (cpm_read_done) then           ' When interrupt occur
+      GIE_bit = 0                      ' Disable interrupts
+      cpm_read_done = 0               ' Set flag = 0
+      CF_calc = CF_calc + CF
+      cpm = counts * 6                 ' Convert frequency to CPM; CPM = freq * ( 60 sec / measuring period)
+      dose = cpm * CF_calc             ' Convert CPM to uSv/h (cpm * conversion factor  = uSv/h); Conversion Factor for SBM20 is 0.0057
+      CF_calc = $0000
+      
+         if n = 0 then
+            n = 1
+            n2 = 1
+            else
+                  n2 = 0
+                  LCD_Out(1, 1, "             CPM")
+                  LCD_Out(2, 1, "            Sv/h")
+                  CustomChar (2, 12)        ' Write custom character u
+                  
+                  LongIntToStr (cpm, CPM_Display)
+                  ltrim (CPM_Display)
+                  UART1_Write_Text(CPM_Display)
+                  LCD_Out(1, 1, CPM_Display)
+                  
+
+                  ch = (dose div 1000000) mod 10
+                  Lcd_Chr (2, 1, 48+ch)
+                  ch = (dose div 100000) mod 10
+                  Lcd_Chr_CP (48+ch)
+                  ch = (dose div 10000) mod 10
+                  Lcd_Chr_CP (48+ch)
+                  Lcd_Chr_CP (".")
+                  ch = (dose div 1000) mod 10
+                  Lcd_Chr_CP (48+ch)
+                  ch = (dose div 100) mod 10
+                  Lcd_Chr_CP (48+ch)
+                  ch = (dose div 10) mod 10
+                  Lcd_Chr_CP (48+ch)
+                  
+                  if cpm > ALARM then
+                    alert = 1
+                    light = 1
+                    LCD_Out (1, 9, "HIGH")
+                    else 
+                    alert = 0
+                    light = 0
+                    LCD_Out (1, 9, "    ")
+                  end if
+                  
+         end if
+            
+
+      
+      if Button (PORTC, 0, 50, 1) then
+       light = 1
+      end if
+      
+      if Button (PORTC, 3, 50, 1) then calibration
+        LCD_Out(1, 1, "             CPM")
+        LCD_Out(2, 1, "            Sv/h")
+        CustomChar (2, 12)                  ' Write custom character u
+      end if
+      cnt = 0
+      GIE_bit = 1                      ' Enable interrupts
+
+    end if
+  wend                                 ' Endless loop end
+
+
+end.
